@@ -1,0 +1,79 @@
+name: Build and publish signed Docker image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  multiarch-build:
+    name: Build and publish signed image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load DCT delegation key
+        env:
+          DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE: ${{ secrets.DCT_KEY_PASSPHRASE }}
+          DCT_KEY_BASE64: ${{ secrets.DCT_KEY_BASE64 }}
+        run: |
+          echo "$DCT_KEY_BASE64" | base64 -d > delegation.key
+          docker trust key load delegation.key --name gha
+          rm delegation.key
+
+      - name: Get Docker tags
+        id: docker_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            nginxproxy/${{ github.event.repository.name }}
+          tags: |
+            type=raw,value=signed
+          labels: |
+            org.opencontainers.image.authors=Nicolas Duchon <nicolas.duchon@gmail.com> (@buchdag)
+          flavor: |
+            latest=false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and load the image
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Sign the image
+        env:
+          DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE: ${{ secrets.DCT_KEY_PASSPHRASE }}
+        run: |
+          docker trust sign nginxproxy/${{ github.event.repository.name }}:signed
+
+      - name: Verify the image signature
+        run: |
+          docker trust inspect --pretty nginxproxy/${{ github.event.repository.name }}:signed
+
+      - name: Images digests
+        run: echo ${{ steps.docker_build.outputs.digest }}
