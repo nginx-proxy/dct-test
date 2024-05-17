@@ -21,20 +21,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Load DCT delegation key
-        env:
-          DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE: ${{ secrets.DCT_KEY_PASSPHRASE }}
-          DCT_KEY_BASE64: ${{ secrets.DCT_KEY_BASE64 }}
-        run: |
-          echo "$DCT_KEY_BASE64" | base64 -d > delegation.key
-          chmod 600 delegation.key
-          docker trust key load delegation.key --name gha
-
       - name: Login to DockerHub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Load DCT delegation key
+        shell: sh
+        env:
+          DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE: ${{ secrets.DCT_KEY_PASSPHRASE }}
+          DCT_KEY_PATH: ~/.docker/trust/private/${{ vars.DCT_KEY_ID }}.key
+        run: |
+          mkdir -p ~/.docker/trust/private
+          chmod -R 700 ~/.docker/trust
+          echo "${{ secrets.DCT_KEY }}" > "$DCT_KEY_PATH"
+          chmod 600 "$DCT_KEY_PATH"
+          docker trust key load "$DCT_KEY_PATH"
 
       - name: Build the image
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
@@ -50,4 +53,6 @@ jobs:
           docker trust inspect --pretty ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
       - name: Remove DCT delegation key
-        run: rm delegation.key
+        if: always()
+        run: |
+          rm -rf ~/.docker/trust/private
